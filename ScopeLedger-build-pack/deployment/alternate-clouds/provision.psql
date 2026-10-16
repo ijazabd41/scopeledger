@@ -1,0 +1,56 @@
+\set ON_ERROR_STOP on
+\echo 'ScopeLedger PostgreSQL provisioning (secrets are prompted without echo)'
+\echo 'Enter n8n_runtime password:'
+\prompt -s n8n_password
+\echo 'Enter scopeledger_reader_login password:'
+\prompt -s reader_password
+\echo 'Enter scopeledger_web_login password:'
+\prompt -s web_password
+\echo 'Enter scopeledger_worker_login password:'
+\prompt -s worker_password
+
+SELECT format('CREATE ROLE n8n_runtime LOGIN PASSWORD %L', :'n8n_password')
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='n8n_runtime') \gexec
+ALTER ROLE n8n_runtime PASSWORD :'n8n_password';
+
+SELECT format('CREATE ROLE scopeledger_reader_login LOGIN PASSWORD %L', :'reader_password')
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='scopeledger_reader_login') \gexec
+ALTER ROLE scopeledger_reader_login PASSWORD :'reader_password';
+SELECT format('CREATE ROLE scopeledger_web_login LOGIN PASSWORD %L', :'web_password')
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='scopeledger_web_login') \gexec
+ALTER ROLE scopeledger_web_login PASSWORD :'web_password';
+SELECT format('CREATE ROLE scopeledger_worker_login LOGIN PASSWORD %L', :'worker_password')
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='scopeledger_worker_login') \gexec
+ALTER ROLE scopeledger_worker_login PASSWORD :'worker_password';
+
+SELECT 'CREATE DATABASE n8n OWNER n8n_runtime'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname='n8n') \gexec
+SELECT format('ALTER DATABASE n8n OWNER TO n8n_runtime') \gexec
+SELECT 'CREATE DATABASE scopeledger'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname='scopeledger') \gexec
+
+\connect n8n
+ALTER SCHEMA public OWNER TO n8n_runtime;
+GRANT ALL ON SCHEMA public TO n8n_runtime;
+
+\connect scopeledger
+\ir ../../schema.sql
+\ir ../../db/migrations/002_authorization_and_execution.sql
+\ir ../../db/migrations/003_least_privilege_roles.sql
+
+GRANT scopeledger_reader TO scopeledger_reader_login;
+GRANT scopeledger_web TO scopeledger_web_login;
+GRANT scopeledger_worker TO scopeledger_worker_login;
+
+SELECT has_database_privilege('n8n_runtime','n8n','CONNECT') AS n8n_connect,
+       has_function_privilege('scopeledger_web_login',
+         'scopeledger.decide_proposal(text,uuid,integer,text,text,text,text,text)','EXECUTE') AS web_decide,
+       has_table_privilege('scopeledger_web_login','scopeledger.actions','INSERT') AS web_direct_action_insert,
+       has_table_privilege('scopeledger_reader_login','scopeledger.evidence','SELECT') AS reader_evidence,
+       has_table_privilege('scopeledger_reader_login','scopeledger.auth_challenges','SELECT') AS reader_auth;
+\echo 'scopeledger_provisioning_complete'
+
+\unset n8n_password
+\unset reader_password
+\unset web_password
+\unset worker_password

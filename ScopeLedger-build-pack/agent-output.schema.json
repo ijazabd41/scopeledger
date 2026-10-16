@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ScopeLedger investigator recommendation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "classification",
+    "summary",
+    "evidence",
+    "gaps",
+    "suggested_options"
+  ],
+  "properties": {
+    "classification": {
+      "enum": [
+        "covered",
+        "change",
+        "ambiguous"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "evidence": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "evidence_id",
+          "excerpt",
+          "supports"
+        ],
+        "properties": {
+          "evidence_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "excerpt": {
+            "type": "string",
+            "maxLength": 600
+          },
+          "supports": {
+            "type": "string",
+            "maxLength": 600
+          }
+        }
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "string",
+        "maxLength": 600
+      }
+    },
+    "suggested_options": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "description",
+          "added_deliverables",
+          "removed_deliverable_ids",
+          "manager_confirmation_required"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "charge",
+              "swap",
+              "goodwill",
+              "clarify",
+              "decline"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1200
+          },
+          "added_deliverables": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "maxItems": 10
+          },
+          "removed_deliverable_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "maxItems": 10
+          },
+          "manager_confirmation_required": {
+            "const": true
+          }
+        }
+      }
+    }
+  }
+}
