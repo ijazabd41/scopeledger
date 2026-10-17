@@ -1,0 +1,93 @@
+{
+  "name": "ScopePilot WF03 - Client Decision Challenge",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "scopeledger-client-decision-request",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c3d4e5f6-0003-4000-8000-000000000001",
+      "name": "Client Decision Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "webhookId": "91a87b1c-3e4f-4d6a-8b1e-0123456789ad"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT challenge_id, delivery_email, one_time_code, challenge_expires_at, proposal_id, proposal_version, payload_hash, proposal_payload, proposal_expires_at\nFROM scopeledger.request_client_decision_challenge(\n  $1::uuid,\n  $2::text\n);",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.body.proposal_id,\n  $json.headers['x-forwarded-for'] || $json.headers['x-real-ip'] || ''\n] }}"
+        }
+      },
+      "id": "c3d4e5f6-0003-4000-8000-000000000002",
+      "name": "Create Client Challenge",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [260, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_SCOPELEDGER_WEB_DB",
+          "name": "scopeledger-web-db"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.delivery_email }}",
+        "subject": "={{ 'ScopePilot client decision code — proposal v' + $json.proposal_version }}",
+        "emailType": "text",
+        "message": "={{ 'A ScopePilot proposal is awaiting your decision.\\n\\nProposal ID: ' + $json.proposal_id + '\\nVersion: ' + $json.proposal_version + '\\nPayload SHA-256: ' + $json.payload_hash + '\\nProposal expires: ' + $json.proposal_expires_at + '\\nCode expires: ' + $json.challenge_expires_at + '\\n\\nExact proposal options:\\n' + JSON.stringify($json.proposal_payload, null, 2) + '\\n\\nOne-time decision code: ' + $json.one_time_code + '\\n\\nUse this code only on the ScopePilot decision form after reviewing the exact options.' }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "c3d4e5f6-0003-4000-8000-000000000003",
+      "name": "Send Client OTP",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [520, 0],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_SCOPELEDGER_GMAIL",
+          "name": "scopeledger-gmail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  status: 'verification_required',\n  challenge_id: $('Create Client Challenge').first().json.challenge_id,\n  proposal_id: $('Create Client Challenge').first().json.proposal_id,\n  proposal_version: $('Create Client Challenge').first().json.proposal_version,\n  payload_hash: $('Create Client Challenge').first().json.payload_hash,\n  proposal_expires_at: $('Create Client Challenge').first().json.proposal_expires_at,\n  challenge_expires_at: $('Create Client Challenge').first().json.challenge_expires_at\n}) }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "c3d4e5f6-0003-4000-8000-000000000004",
+      "name": "Return Safe Challenge Receipt",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [780, 0]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Client Decision Request": {
+      "main": [[{ "node": "Create Client Challenge", "type": "main", "index": 0 }]]
+    },
+    "Create Client Challenge": {
+      "main": [[{ "node": "Send Client OTP", "type": "main", "index": 0 }]]
+    },
+    "Send Client OTP": {
+      "main": [[{ "node": "Return Safe Challenge Receipt", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none"
+  }
+}

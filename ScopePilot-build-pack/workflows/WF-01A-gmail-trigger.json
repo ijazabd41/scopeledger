@@ -1,0 +1,74 @@
+{
+  "name": "ScopePilot WF01A - Gmail Intake Trigger",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            { "mode": "everyMinute" }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "q": "in:inbox"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000101",
+      "name": "New Gmail Message",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_SCOPELEDGER_GMAIL",
+          "name": "scopeledger-gmail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const message = $json;\nconst headers = message.payload?.headers || [];\nconst header = name => headers.find(h => String(h.name).toLowerCase() === name.toLowerCase())?.value || '';\nfunction decode(data) {\n  if (!data) return '';\n  return Buffer.from(String(data).replace(/-/g,'+').replace(/_/g,'/'), 'base64').toString('utf8');\n}\nfunction bodies(part, out = []) {\n  if (!part) return out;\n  if (part.mimeType === 'text/plain' && part.body?.data) out.push(decode(part.body.data));\n  for (const child of (part.parts || [])) bodies(child, out);\n  return out;\n}\nlet body = bodies(message.payload).join('\\n').trim();\nif (!body) body = decode(message.payload?.body?.data).trim();\nconst from = header('From');\nconst emailMatch = from.match(/<([^>]+)>/) || from.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/i);\nconst sender = emailMatch ? (emailMatch[1] || emailMatch[0]) : '';\nif (!message.id || !sender || !body) throw new Error('Gmail message is missing id, sender, or plain-text body');\nreturn [{json:{\n  mailbox_id:$env.SCOPELEDGER_MAILBOX_ID || 'gmail-primary',\n  message_id:message.id,\n  thread_id:message.threadId || '',\n  sender_email:sender.toLowerCase(),\n  subject:header('Subject'),\n  request_body:body.slice(0,12000)\n}}];"
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000102",
+      "name": "Normalize Gmail Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.N8N_WEBHOOK_URL || '').replace(/\\/?$/, '/') + 'webhook/scopeledger-internal-intake' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000103",
+      "name": "Submit Authenticated Intake",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 0],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_SCOPELEDGER_INTERNAL_HEADER",
+          "name": "scopeledger-internal-webhook"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "New Gmail Message": { "main": [[{ "node": "Normalize Gmail Message", "type": "main", "index": 0 }]] },
+    "Normalize Gmail Message": { "main": [[{ "node": "Submit Authenticated Intake", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none"
+  }
+}

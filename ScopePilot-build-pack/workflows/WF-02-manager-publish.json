@@ -1,0 +1,93 @@
+{
+  "name": "ScopePilot WF02 - Manager Publication Request",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "scopeledger-manager-publish-request",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b2c3d4e5-0002-4000-8000-000000000001",
+      "name": "Manager Publication Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "webhookId": "91a87b1c-3e4f-4d6a-8b1e-0123456789ac"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT challenge_id, delivery_email, one_time_code, challenge_expires_at, proposal_id, proposal_version, payload_hash, proposal_payload\nFROM scopeledger.request_manager_publication(\n  $1::uuid,\n  $2::jsonb,\n  now() + make_interval(hours => $3::integer),\n  $4::text\n);",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.body.case_id,\n  JSON.stringify($json.body.payload),\n  Math.min(Math.max(Number($json.body.expires_in_hours || 72), 1), 168),\n  $json.headers['x-forwarded-for'] || $json.headers['x-real-ip'] || ''\n] }}"
+        }
+      },
+      "id": "b2c3d4e5-0002-4000-8000-000000000002",
+      "name": "Create Draft And Manager Challenge",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [260, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_SCOPELEDGER_WEB_DB",
+          "name": "scopeledger-web-db"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.delivery_email }}",
+        "subject": "={{ 'ScopePilot manager approval code — proposal v' + $json.proposal_version }}",
+        "emailType": "text",
+        "message": "={{ 'A ScopePilot proposal is awaiting your approval.\\n\\nProposal ID: ' + $json.proposal_id + '\\nVersion: ' + $json.proposal_version + '\\nPayload SHA-256: ' + $json.payload_hash + '\\nExpires: ' + $json.challenge_expires_at + '\\n\\nOne-time approval code: ' + $json.one_time_code + '\\n\\nConfirm only after reviewing the exact proposal payload in the manager form. ScopePilot will never ask you to send this code by email.' }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "b2c3d4e5-0002-4000-8000-000000000003",
+      "name": "Send Manager OTP",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [520, 0],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_SCOPELEDGER_GMAIL",
+          "name": "scopeledger-gmail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  status: 'verification_required',\n  challenge_id: $('Create Draft And Manager Challenge').first().json.challenge_id,\n  proposal_id: $('Create Draft And Manager Challenge').first().json.proposal_id,\n  proposal_version: $('Create Draft And Manager Challenge').first().json.proposal_version,\n  payload_hash: $('Create Draft And Manager Challenge').first().json.payload_hash,\n  challenge_expires_at: $('Create Draft And Manager Challenge').first().json.challenge_expires_at\n}) }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "b2c3d4e5-0002-4000-8000-000000000004",
+      "name": "Return Safe Challenge Receipt",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [780, 0]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manager Publication Request": {
+      "main": [[{ "node": "Create Draft And Manager Challenge", "type": "main", "index": 0 }]]
+    },
+    "Create Draft And Manager Challenge": {
+      "main": [[{ "node": "Send Manager OTP", "type": "main", "index": 0 }]]
+    },
+    "Send Manager OTP": {
+      "main": [[{ "node": "Return Safe Challenge Receipt", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none"
+  }
+}

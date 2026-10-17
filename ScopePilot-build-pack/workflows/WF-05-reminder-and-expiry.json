@@ -1,0 +1,73 @@
+{
+  "name": "ScopePilot WF05 - Scheduled Reminder and Expiry",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "e5f6a7b8-0005-4000-8000-000000000001",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT scopeledger.expire_due_proposals('scheduled-expiry-' || to_char(now(), 'YYYYMMDDHH24MI')) AS expired_count;",
+        "options": {}
+      },
+      "id": "e5f6a7b8-0005-4000-8000-000000000002",
+      "name": "Expire Due Proposals",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [260, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_SCOPELEDGER_WORKER_DB",
+          "name": "scopeledger-worker-db"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT scopeledger.enqueue_proposal_reminder(p.id, 'reminder_client_review') AS notification_id\nFROM scopeledger.proposals p\nJOIN scopeledger.cases c ON c.id = p.case_id\nWHERE p.status = 'published'\n  AND c.state = 'awaiting_client'\n  AND p.expires_at > now()\n  AND p.expires_at <= now() + interval '24 hours';",
+        "options": {}
+      },
+      "id": "e5f6a7b8-0005-4000-8000-000000000003",
+      "name": "Enqueue Due Reminders",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [520, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_SCOPELEDGER_WORKER_DB",
+          "name": "scopeledger-worker-db"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every 15 Minutes": {
+      "main": [[{ "node": "Expire Due Proposals", "type": "main", "index": 0 }]]
+    },
+    "Expire Due Proposals": {
+      "main": [[{ "node": "Enqueue Due Reminders", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none"
+  }
+}

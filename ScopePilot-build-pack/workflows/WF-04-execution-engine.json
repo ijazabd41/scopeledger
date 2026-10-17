@@ -1,0 +1,488 @@
+{
+  "name": "ScopePilot WF04 - Scheduled Provider Execution Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000001",
+      "name": "Every Minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH claimed AS (\n  SELECT * FROM scopeledger.claim_next_action('n8n-provider-worker', 180)\n)\nSELECT a.id AS action_id, a.case_id, a.proposal_id, a.action_kind, a.provider,\n       a.resource_id, a.business_key, a.approved_payload,\n       p.repo_owner, p.repo_name, p.drive_folder_id\nFROM claimed a\nJOIN scopeledger.cases c ON c.id = a.case_id\nJOIN scopeledger.projects p ON p.id = c.project_id;",
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000002",
+      "name": "Claim Next Action",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [240, 0],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_SCOPELEDGER_WORKER_DB",
+          "name": "scopeledger-worker-db"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "action-present",
+              "leftValue": "={{ $json.action_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000003",
+      "name": "Has Action",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [480, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "is-create",
+              "leftValue": "={{ $json.action_kind }}",
+              "rightValue": "github_issue_create",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000004",
+      "name": "Is GitHub Create",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [720, -120]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.github.com/repos/{{ $json.repo_owner }}/{{ $json.repo_name }}/issues",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github+json" },
+            { "name": "X-GitHub-Api-Version", "value": "2022-11-28" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  title: $json.approved_payload.title,\n  body: ($json.approved_payload.body || '') + '\\n\\n' + ($json.approved_payload.marker || ('ScopePilot:' + $json.business_key)),\n  labels: $json.approved_payload.labels || ['scopeledger:approved']\n} }}",
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000005",
+      "name": "Create GitHub Issue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [980, -320],
+      "credentials": {
+        "githubApi": {
+          "id": "REPLACE_SCOPELEDGER_GITHUB",
+          "name": "scopeledger-github"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github+json" },
+            { "name": "X-GitHub-Api-Version", "value": "2022-11-28" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000006",
+      "name": "Read Back Created Issue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1240, -320],
+      "credentials": {
+        "githubApi": {
+          "id": "REPLACE_SCOPELEDGER_GITHUB",
+          "name": "scopeledger-github"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const claim = $('Claim Next Action').first().json;\nconst issue = $json;\nconst expected = claim.approved_payload || {};\nconst marker = expected.marker || ('ScopePilot:' + claim.business_key);\nconst labels = (issue.labels || []).map(l => typeof l === 'string' ? l : l.name);\nif (issue.title !== expected.title) throw new Error('GitHub read-back title mismatch');\nif (!(issue.body || '').includes(marker)) throw new Error('GitHub read-back marker missing');\nfor (const label of (expected.labels || ['scopeledger:approved'])) {\n  if (!labels.includes(label)) throw new Error('GitHub read-back label missing: ' + label);\n}\nreturn [{json:{\n  provider_receipt:{provider:'github', issue_number:issue.number, resource_id:String(issue.number), url:issue.html_url, node_id:issue.node_id},\n  verification:{read_back:true, title:issue.title, state:issue.state, labels, marker_matched:true, observed_updated_at:issue.updated_at}\n}}];"
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000007",
+      "name": "Verify Created Issue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, -320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "is-supersede",
+              "leftValue": "={{ $json.action_kind }}",
+              "rightValue": "github_issue_supersede",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000008",
+      "name": "Is GitHub Supersede",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [980, 40]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $json.repo_owner }}/{{ $json.repo_name }}/issues/{{ $json.approved_payload.issue_number || $json.resource_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github+json" },
+            { "name": "X-GitHub-Api-Version", "value": "2022-11-28" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000009",
+      "name": "Read Issue Before Supersede",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1240, -20],
+      "credentials": {
+        "githubApi": {
+          "id": "REPLACE_SCOPELEDGER_GITHUB",
+          "name": "scopeledger-github"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const claim = $('Claim Next Action').first().json;\nconst issue = $json;\nconst existingLabels = (issue.labels || []).map(l => typeof l === 'string' ? l : l.name);\nconst requested = claim.approved_payload.labels || ['scopeledger:superseded'];\nreturn [{json:{\n  issue_number: issue.number,\n  before_updated_at: issue.updated_at,\n  patch: {state:'closed', labels:[...new Set([...existingLabels, ...requested])]}\n}}];"
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000010",
+      "name": "Preserve Labels And Prepare Patch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, -20]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.github.com/repos/{{ $('Claim Next Action').first().json.repo_owner }}/{{ $('Claim Next Action').first().json.repo_name }}/issues/{{ $json.issue_number }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github+json" },
+            { "name": "X-GitHub-Api-Version", "value": "2022-11-28" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.patch }}",
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000011",
+      "name": "Supersede GitHub Issue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, -20],
+      "credentials": {
+        "githubApi": {
+          "id": "REPLACE_SCOPELEDGER_GITHUB",
+          "name": "scopeledger-github"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github+json" },
+            { "name": "X-GitHub-Api-Version", "value": "2022-11-28" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000012",
+      "name": "Read Back Superseded Issue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2020, -20],
+      "credentials": {
+        "githubApi": {
+          "id": "REPLACE_SCOPELEDGER_GITHUB",
+          "name": "scopeledger-github"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const claim = $('Claim Next Action').first().json;\nconst issue = $json;\nconst labels = (issue.labels || []).map(l => typeof l === 'string' ? l : l.name);\nfor (const label of (claim.approved_payload.labels || ['scopeledger:superseded'])) {\n  if (!labels.includes(label)) throw new Error('GitHub supersession label missing: ' + label);\n}\nif (issue.state !== 'closed') throw new Error('GitHub issue was not closed');\nreturn [{json:{\n  provider_receipt:{provider:'github', issue_number:issue.number, resource_id:String(issue.number), url:issue.html_url, node_id:issue.node_id},\n  verification:{read_back:true, state:issue.state, labels, observed_updated_at:issue.updated_at}\n}}];"
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000013",
+      "name": "Verify Superseded Issue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2280, -20]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "is-doc",
+              "leftValue": "={{ $json.action_kind }}",
+              "rightValue": "scope_document_create",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000014",
+      "name": "Is Scope Document Create",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1240, 260]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.googleapis.com/drive/v3/files",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "fields", "value": "id,name,webViewLink,modifiedTime" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  name: $json.approved_payload.title,\n  mimeType: 'application/vnd.google-apps.document',\n  parents: [$json.approved_payload.folder_id || $json.drive_folder_id],\n  appProperties: {\n    scopeledgerMarker: $json.approved_payload.marker || ('ScopePilot:' + $json.business_key),\n    scopeledgerBusinessKey: $json.business_key\n  }\n} }}",
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000015",
+      "name": "Create Google Doc",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1500, 200],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "REPLACE_SCOPELEDGER_GOOGLE_OAUTH",
+          "name": "scopeledger-google-oauth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://docs.googleapis.com/v1/documents/{{ $json.id }}:batchUpdate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {requests:[{insertText:{endOfSegmentLocation:{},text:(\n  ($('Claim Next Action').first().json.approved_payload.marker || ('ScopePilot:' + $('Claim Next Action').first().json.business_key)) + '\\n\\n' +\n  $('Claim Next Action').first().json.approved_payload.title + '\\n\\n' +\n  JSON.stringify($('Claim Next Action').first().json.approved_payload, null, 2)\n)}}]} }}",
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000016",
+      "name": "Populate Google Doc",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 200],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "REPLACE_SCOPELEDGER_GOOGLE_OAUTH",
+          "name": "scopeledger-google-oauth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://docs.googleapis.com/v1/documents/{{ $('Create Google Doc').first().json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000017",
+      "name": "Read Back Google Doc",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2020, 200],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "REPLACE_SCOPELEDGER_GOOGLE_OAUTH",
+          "name": "scopeledger-google-oauth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const claim = $('Claim Next Action').first().json;\nconst created = $('Create Google Doc').first().json;\nconst doc = $json;\nconst marker = claim.approved_payload.marker || ('ScopePilot:' + claim.business_key);\nconst serialized = JSON.stringify(doc);\nif (!doc.documentId || doc.documentId !== created.id) throw new Error('Google Docs read-back ID mismatch');\nif (!serialized.includes(marker)) throw new Error('Google Docs read-back marker missing');\nif (!Array.isArray(doc.body?.content) || doc.body.content.length === 0) throw new Error('Google Docs read-back is empty');\nreturn [{json:{\n  provider_receipt:{provider:'google_docs', document_id:doc.documentId, provider_revision:doc.revisionId || created.modifiedTime, document_url:created.webViewLink},\n  verification:{read_back:true, marker_matched:true, title:doc.title, body_elements:doc.body.content.length}\n}}];"
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000018",
+      "name": "Verify Google Doc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2280, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT (scopeledger.record_action_result(\n  $1::uuid,\n  'n8n-provider-worker',\n  'verified',\n  $2::jsonb,\n  $3::jsonb,\n  NULL,\n  NULL\n)).id AS recorded_action_id;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Claim Next Action').first().json.action_id,\n  JSON.stringify($json.provider_receipt),\n  JSON.stringify($json.verification)\n] }}"
+        }
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000019",
+      "name": "Record Verified Action",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2540, -80],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_SCOPELEDGER_WORKER_DB",
+          "name": "scopeledger-worker-db"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM scopeledger.complete_case_if_ready(\n  $1::uuid,\n  $2::text\n);",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Claim Next Action').first().json.case_id,\n  'n8n-finalize-' + $execution.id\n] }}"
+        }
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000020",
+      "name": "Finalize If All Verified",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2800, -80],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_SCOPELEDGER_WORKER_DB",
+          "name": "scopeledger-worker-db"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT (scopeledger.record_action_result(\n  $1::uuid,\n  'n8n-provider-worker',\n  'blocked',\n  jsonb_build_object('provider', $2::text),\n  NULL,\n  'UNSUPPORTED_ACTION_KIND',\n  NULL\n)).id AS blocked_action_id;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Claim Next Action').first().json.action_id,\n  $('Claim Next Action').first().json.provider\n] }}"
+        }
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000021",
+      "name": "Block Unsupported Action",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1500, 440],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_SCOPELEDGER_WORKER_DB",
+          "name": "scopeledger-worker-db"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every Minute": { "main": [[{ "node": "Claim Next Action", "type": "main", "index": 0 }]] },
+    "Claim Next Action": { "main": [[{ "node": "Has Action", "type": "main", "index": 0 }]] },
+    "Has Action": { "main": [[{ "node": "Is GitHub Create", "type": "main", "index": 0 }], []] },
+    "Is GitHub Create": {
+      "main": [
+        [{ "node": "Create GitHub Issue", "type": "main", "index": 0 }],
+        [{ "node": "Is GitHub Supersede", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create GitHub Issue": { "main": [[{ "node": "Read Back Created Issue", "type": "main", "index": 0 }]] },
+    "Read Back Created Issue": { "main": [[{ "node": "Verify Created Issue", "type": "main", "index": 0 }]] },
+    "Verify Created Issue": { "main": [[{ "node": "Record Verified Action", "type": "main", "index": 0 }]] },
+    "Is GitHub Supersede": {
+      "main": [
+        [{ "node": "Read Issue Before Supersede", "type": "main", "index": 0 }],
+        [{ "node": "Is Scope Document Create", "type": "main", "index": 0 }]
+      ]
+    },
+    "Read Issue Before Supersede": { "main": [[{ "node": "Preserve Labels And Prepare Patch", "type": "main", "index": 0 }]] },
+    "Preserve Labels And Prepare Patch": { "main": [[{ "node": "Supersede GitHub Issue", "type": "main", "index": 0 }]] },
+    "Supersede GitHub Issue": { "main": [[{ "node": "Read Back Superseded Issue", "type": "main", "index": 0 }]] },
+    "Read Back Superseded Issue": { "main": [[{ "node": "Verify Superseded Issue", "type": "main", "index": 0 }]] },
+    "Verify Superseded Issue": { "main": [[{ "node": "Record Verified Action", "type": "main", "index": 0 }]] },
+    "Is Scope Document Create": {
+      "main": [
+        [{ "node": "Create Google Doc", "type": "main", "index": 0 }],
+        [{ "node": "Block Unsupported Action", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Google Doc": { "main": [[{ "node": "Populate Google Doc", "type": "main", "index": 0 }]] },
+    "Populate Google Doc": { "main": [[{ "node": "Read Back Google Doc", "type": "main", "index": 0 }]] },
+    "Read Back Google Doc": { "main": [[{ "node": "Verify Google Doc", "type": "main", "index": 0 }]] },
+    "Verify Google Doc": { "main": [[{ "node": "Record Verified Action", "type": "main", "index": 0 }]] },
+    "Record Verified Action": { "main": [[{ "node": "Finalize If All Verified", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none"
+  }
+}

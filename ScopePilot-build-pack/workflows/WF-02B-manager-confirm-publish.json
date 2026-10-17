@@ -1,0 +1,68 @@
+{
+  "name": "ScopePilot WF02B - Manager Confirm Publication",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "scopeledger-manager-publish-confirm",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b2c3d4e5-0002-4000-8000-000000000101",
+      "name": "Manager Confirmation",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "webhookId": "91a87b1c-3e4f-4d6a-8b1e-0123456789bc"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT proposal_id, proposal_version, payload_hash, expires_at\nFROM scopeledger.confirm_manager_publication(\n  $1::uuid,\n  $2::text,\n  $3::text\n);",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.body.challenge_id,\n  String($json.body.code || ''),\n  $json.body.correlation_id || ('manager-confirm-' + $execution.id)\n] }}"
+        }
+      },
+      "id": "b2c3d4e5-0002-4000-8000-000000000102",
+      "name": "Verify OTP And Publish",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [280, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_SCOPELEDGER_WEB_DB",
+          "name": "scopeledger-web-db"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  status: 'published',\n  proposal_id: $json.proposal_id,\n  proposal_version: $json.proposal_version,\n  payload_hash: $json.payload_hash,\n  expires_at: $json.expires_at\n}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "b2c3d4e5-0002-4000-8000-000000000103",
+      "name": "Return Publication Receipt",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [560, 0]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manager Confirmation": {
+      "main": [[{ "node": "Verify OTP And Publish", "type": "main", "index": 0 }]]
+    },
+    "Verify OTP And Publish": {
+      "main": [[{ "node": "Return Publication Receipt", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none"
+  }
+}

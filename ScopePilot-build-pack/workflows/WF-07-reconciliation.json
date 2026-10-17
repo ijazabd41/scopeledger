@@ -1,0 +1,52 @@
+{
+  "name": "ScopePilot WF07 - Scheduled Action Reconciliation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "a7b8c9d0-0007-4000-8000-000000000001",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT *\nFROM scopeledger.reconcile_stalled_actions(\n  'n8n-reconciler',\n  5,\n  'scheduled-reconcile-' || to_char(now(), 'YYYYMMDDHH24MI')\n);",
+        "options": {}
+      },
+      "id": "a7b8c9d0-0007-4000-8000-000000000002",
+      "name": "Requeue Expired Leases",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [280, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_SCOPELEDGER_WORKER_DB",
+          "name": "scopeledger-worker-db"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [[{ "node": "Requeue Expired Leases", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none"
+  }
+}
