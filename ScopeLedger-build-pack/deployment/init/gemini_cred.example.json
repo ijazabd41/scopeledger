@@ -1,0 +1,9 @@
+[
+  {
+    "name": "google-gemini-key",
+    "type": "googlePalmApi",
+    "data": {
+      "apiKey": "YOUR_GEMINI_API_KEY_HERE"
+    }
+  }
+]

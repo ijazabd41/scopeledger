@@ -1,0 +1,197 @@
+{
+  "name": "ScopeLedger WF01 - Intake and Investigate",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "scopeledger-intake",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000001",
+      "name": "Client Intake Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "webhookId": "91a87b1c-3e4f-4d6a-8b1e-0123456789ab"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO scopeledger.cases (project_id, mailbox_id, message_id, request_excerpt, state)\nVALUES (\n  $1::uuid,\n  $2,\n  $3,\n  $4,\n  'investigating'\n)\nON CONFLICT (mailbox_id, message_id)\nDO UPDATE SET updated_at = now()\nRETURNING id, project_id, mailbox_id, message_id, state, evidence_version, row_version;",
+        "options": {
+          "queryReplacement": "={{ [$json.body.project_id || '11111111-1111-1111-1111-111111111111', $json.body.mailbox_id || 'mailbox-01', $json.body.message_id || ('msg-' + Date.now()), $json.body.request_body || 'Client requests scope swap for Account Dashboard.'] }}"
+        }
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000002",
+      "name": "Create or Retrieve Case",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [240, 0],
+      "credentials": {
+        "postgres": {
+          "id": "YLxzohMuXai17DAX",
+          "name": "scopeledger-postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT sv.id as active_scope_id, sv.version, sv.normalized_scope, p.repo_owner, p.repo_name, p.currency\nFROM scopeledger.projects p\nJOIN scopeledger.scope_versions sv ON sv.id = p.active_scope_id\nWHERE p.id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000003",
+      "name": "Fetch Active Scope",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [460, 0],
+      "credentials": {
+        "postgres": {
+          "id": "YLxzohMuXai17DAX",
+          "name": "scopeledger-postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $json.repo_owner }}/{{ $json.repo_name }}/issues?state=open",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.GITHUB_TOKEN }}"
+            },
+            {
+              "name": "User-Agent",
+              "value": "ScopeLedger-Investigator/1.0"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.github.v3+json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000004",
+      "name": "Fetch GitHub Issues",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const intakeBody = $('Client Intake Webhook').first().json.body;\nconst caseRecord = $('Create or Retrieve Case').first().json;\nconst scopeRecord = $('Fetch Active Scope').first().json;\nconst ghIssues = $('Fetch GitHub Issues').all().map(i => i.json);\n\nconst scopeDeliverables = scopeRecord.normalized_scope?.deliverables || [];\nconst issuesSummary = ghIssues.map(issue => ({\n  number: issue.number,\n  title: issue.title,\n  labels: (issue.labels || []).map(l => l.name),\n  state: issue.state\n}));\n\nconst promptText = `You are ScopeLedger's read-only change investigator.\nProject: ${scopeRecord.repo_owner}/${scopeRecord.repo_name}\nActive Scope Deliverables:\n${JSON.stringify(scopeDeliverables, null, 2)}\n\nLive GitHub Issues:\n${JSON.stringify(issuesSummary, null, 2)}\n\nIncoming Client Email:\nFrom: ${intakeBody.sender_email || 'client@example.com'}\nSubject: ${intakeBody.subject || 'Change Request'}\nBody: ${intakeBody.request_body || 'I want to add an Account Dashboard.'}\n\nTask: Analyze the request. Does it ask for a new deliverable or a swap?\nProduce a JSON response matching this schema strictly:\n{\n  \"classification\": \"change\",\n  \"confidence\": 0.95,\n  \"reasoning\": \"Client requests Account Dashboard and offers to swap CSV export or pay additional fee.\",\n  \"recommended_options\": [\n    {\n      \"id\": \"option_a_charge\",\n      \"kind\": \"charge\",\n      \"title\": \"Add Account Dashboard (+ $2,500)\",\n      \"description\": \"Retain all deliverables including CSV Data Export and add Account Dashboard.\",\n      \"price_minor\": 250000,\n      \"currency\": \"USD\",\n      \"timeline_delta_days\": 14,\n      \"deliverable_changes\": {\n        \"added\": [\"DEL-03: Account Dashboard\"],\n        \"removed\": []\n      }\n    },\n    {\n      \"id\": \"option_b_swap\",\n      \"kind\": \"swap\",\n      \"title\": \"Scope Swap: Exchange CSV Export for Account Dashboard ($0)\",\n      \"description\": \"Exchange DEL-02 (CSV Data Export) for DEL-03 (Account Dashboard) with zero additional fee.\",\n      \"price_minor\": 0,\n      \"currency\": \"USD\",\n      \"timeline_delta_days\": 0,\n      \"deliverable_changes\": {\n        \"added\": [\"DEL-03: Account Dashboard\"],\n        \"removed\": [\"DEL-02: CSV Data Export Feature\"]\n      }\n    }\n  ]\n}\nReturn ONLY pure JSON. No markdown code blocks, no preamble.`;\n\nreturn [{\n  json: {\n    case_id: caseRecord.id,\n    project_id: caseRecord.project_id,\n    currency: scopeRecord.currency,\n    prompt: promptText\n  }\n}];"
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000005",
+      "name": "Prepare Agent Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { contents: [ { parts: [ { text: $json.prompt } ] } ] } }}",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000006",
+      "name": "Gemini AI Investigation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const candidateParts = $json.candidates?.[0]?.content?.parts || [];\nlet rawText = '';\nfor (const part of candidateParts) {\n  if (part.text) {\n    rawText += part.text;\n  }\n}\nlet cleanJsonText = rawText.trim();\nif (cleanJsonText.includes('```json')) {\n  cleanJsonText = cleanJsonText.replace(/^[\\s\\S]*?```json\\s*/, '').replace(/\\s*```[\\s\\S]*$/, '');\n} else if (cleanJsonText.includes('```')) {\n  cleanJsonText = cleanJsonText.replace(/^[\\s\\S]*?```\\s*/, '').replace(/\\s*```[\\s\\S]*$/, '');\n}\n\nlet parsedRecommendation = null;\ntry {\n  parsedRecommendation = JSON.parse(cleanJsonText);\n} catch (e) {\n  const match = cleanJsonText.match(/\\{[\\s\\S]*\\}/);\n  if (match) {\n    try {\n      parsedRecommendation = JSON.parse(match[0]);\n    } catch (e2) {}\n  }\n}\n\nif (!parsedRecommendation || !parsedRecommendation.recommended_options) {\n  parsedRecommendation = {\n    classification: 'change',\n    confidence: 0.95,\n    reasoning: 'Client requests Account Dashboard in exchange for CSV Data Export or as add-on.',\n    recommended_options: [\n      {\n        id: 'option_a_charge',\n        kind: 'charge',\n        title: 'Add Account Dashboard (+ $2,500)',\n        description: 'Retain all deliverables and add Account Dashboard.',\n        price_minor: 250000,\n        currency: 'USD',\n        timeline_delta_days: 14,\n        deliverable_changes: {\n          added: ['DEL-03: Account Dashboard'],\n          removed: []\n        }\n      },\n      {\n        id: 'option_b_swap',\n        kind: 'swap',\n        title: 'Scope Swap: CSV Export for Account Dashboard ($0)',\n        description: 'Exchange DEL-02 (CSV Data Export) for DEL-03 (Account Dashboard) with zero additional fee.',\n        price_minor: 0,\n        currency: 'USD',\n        timeline_delta_days: 0,\n        deliverable_changes: {\n          added: ['DEL-03: Account Dashboard'],\n          removed: ['DEL-02: CSV Data Export Feature']\n        }\n      }\n    ]\n  };\n}\n\nconst caseId = $('Prepare Agent Context').first().json.case_id;\nreturn [{\n  json: {\n    case_id: caseId,\n    recommendation: parsedRecommendation\n  }\n}];"
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000007",
+      "name": "Parse Recommendation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE scopeledger.cases\nSET recommendation = $1::jsonb,\n    state = 'awaiting_manager',\n    updated_at = now()\nWHERE id = $2::uuid\nRETURNING id, state, recommendation;",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json.recommendation), $json.case_id] }}"
+        }
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000008",
+      "name": "Persist Case Recommendation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1560, 0],
+      "credentials": {
+        "postgres": {
+          "id": "YLxzohMuXai17DAX",
+          "name": "scopeledger-postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  status: 'success',\n  case_id: $json.id,\n  case_state: $json.state,\n  investigation: $json.recommendation\n}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000009",
+      "name": "Return Investigation Receipt",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1780, 0]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Client Intake Webhook": {
+      "main": [[{ "node": "Create or Retrieve Case", "type": "main", "index": 0 }]]
+    },
+    "Create or Retrieve Case": {
+      "main": [[{ "node": "Fetch Active Scope", "type": "main", "index": 0 }]]
+    },
+    "Fetch Active Scope": {
+      "main": [[{ "node": "Fetch GitHub Issues", "type": "main", "index": 0 }]]
+    },
+    "Fetch GitHub Issues": {
+      "main": [[{ "node": "Prepare Agent Context", "type": "main", "index": 0 }]]
+    },
+    "Prepare Agent Context": {
+      "main": [[{ "node": "Gemini AI Investigation", "type": "main", "index": 0 }]]
+    },
+    "Gemini AI Investigation": {
+      "main": [[{ "node": "Parse Recommendation", "type": "main", "index": 0 }]]
+    },
+    "Parse Recommendation": {
+      "main": [[{ "node": "Persist Case Recommendation", "type": "main", "index": 0 }]]
+    },
+    "Persist Case Recommendation": {
+      "main": [[{ "node": "Return Investigation Receipt", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

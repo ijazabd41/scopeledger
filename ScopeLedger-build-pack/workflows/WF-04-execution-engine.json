@@ -1,0 +1,113 @@
+{
+  "name": "ScopeLedger WF04 - Execution Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "scopeledger-execute",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000001",
+      "name": "Execution Dispatcher Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "webhookId": "91a87b1c-3e4f-4d6a-8b1e-0123456789ae"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id as action_id, case_id, proposal_id, action_kind, provider, resource_id, approved_payload\nFROM scopeledger.claim_next_action('n8n-worker-01', 120);",
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000002",
+      "name": "Claim Next Action",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [240, 0],
+      "credentials": {
+        "postgres": {
+          "id": "YLxzohMuXai17DAX",
+          "name": "scopeledger-postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.action_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000003",
+      "name": "Has Claimed Action?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [480, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  status: 'idle',\n  message: 'No pending actions in queue.'\n}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000004",
+      "name": "Return Empty Queue",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [720, 120]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  status: 'action_claimed',\n  action_id: $json.action_id,\n  action_kind: $json.action_kind,\n  provider: $json.provider,\n  case_id: $json.case_id\n}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "d4e5f6a7-0004-4000-8000-000000000005",
+      "name": "Return Claimed Action",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [720, -80]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Execution Dispatcher Webhook": {
+      "main": [[{ "node": "Claim Next Action", "type": "main", "index": 0 }]]
+    },
+    "Claim Next Action": {
+      "main": [[{ "node": "Has Claimed Action?", "type": "main", "index": 0 }]]
+    },
+    "Has Claimed Action?": {
+      "main": [
+        [{ "node": "Return Claimed Action", "type": "main", "index": 0 }],
+        [{ "node": "Return Empty Queue", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
