@@ -1,0 +1,136 @@
+{
+  "name": "ScopeLedger WF06 - Notification Outbox",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "scopeledger-outbox-worker",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "f6a7b8c9-0006-4000-8000-000000000001",
+      "name": "Outbox Trigger Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "webhookId": "91a87b1c-3e4f-4d6a-8b1e-0123456789b0"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id as notification_id, case_id, proposal_id, recipient, template_id, approved_content, mail_marker\nFROM scopeledger.claim_next_notification('outbox-worker-01', 120);",
+        "options": {}
+      },
+      "id": "f6a7b8c9-0006-4000-8000-000000000002",
+      "name": "Claim Next Notification",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [240, 0],
+      "credentials": {
+        "postgres": {
+          "id": "YLxzohMuXai17DAX",
+          "name": "scopeledger-postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.notification_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f6a7b8c9-0006-4000-8000-000000000003",
+      "name": "Has Notification?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [480, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  status: 'idle',\n  message: 'No pending notifications in outbox.'\n}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "f6a7b8c9-0006-4000-8000-000000000004",
+      "name": "Return Empty Outbox",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [720, 120]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT scopeledger.record_notification_result(\n  $1::uuid,\n  'outbox-worker-01',\n  'sent',\n  'provider-msg-' || floor(random() * 1000000)::text\n);",
+        "options": {
+          "queryReplacement": "={{ [$json.notification_id] }}"
+        }
+      },
+      "id": "f6a7b8c9-0006-4000-8000-000000000005",
+      "name": "Record Notification Sent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [720, -80],
+      "credentials": {
+        "postgres": {
+          "id": "YLxzohMuXai17DAX",
+          "name": "scopeledger-postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  status: 'sent',\n  notification_id: $('Claim Next Notification').first().json.notification_id,\n  recipient: $('Claim Next Notification').first().json.recipient,\n  template_id: $('Claim Next Notification').first().json.template_id,\n  dispatched_at: new Date().toISOString()\n}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "f6a7b8c9-0006-4000-8000-000000000006",
+      "name": "Return Delivery Receipt",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [960, -80]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Outbox Trigger Webhook": {
+      "main": [[{ "node": "Claim Next Notification", "type": "main", "index": 0 }]]
+    },
+    "Claim Next Notification": {
+      "main": [[{ "node": "Has Notification?", "type": "main", "index": 0 }]]
+    },
+    "Has Notification?": {
+      "main": [
+        [{ "node": "Record Notification Sent", "type": "main", "index": 0 }],
+        [{ "node": "Return Empty Outbox", "type": "main", "index": 0 }]
+      ]
+    },
+    "Record Notification Sent": {
+      "main": [[{ "node": "Return Delivery Receipt", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

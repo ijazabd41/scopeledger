@@ -1,17 +1,18 @@
 # ScopeLedger progress tracker
 
-Updated: 17 October 2026. Implementation session 2 completed full local vertical slice: live intake, Gemini 3.8 Flash investigation, manager OTP publication, client OTP acceptance (scope swap), execution engine with live GitHub issue creation/supersession, baseline activation, and immutability guards.
+Updated: 17 October 2026. Implementation session 3 completed reliability, recovery, outbox, and reminder routines (B14 & B15). Implemented and verified Migration 004, workflows WF-05/06/07, proposal expiry (T38), outbox idempotency (T37), worker crash recovery (T32), blocked failure guard (T29/T33), baseline supersession stale rejection (T20), concurrent case conflict guard (T22), and 429 Retry-After backoff honor (T30).
 
 ## Status convention
 TODO = not started; IN PROGRESS = active with owner; BLOCKED = named prerequisite; DONE = acceptance criteria met with evidence. Never mark DONE from generated code alone. Test results remain NOT RUN until executed.
 
 ## Current checkpoint
 - Current gate: G0 — Alternate Clouds deployment (local Docker verified; hosted awaiting operator action per `deployment/alternate-clouds/README.md`).
-- Gates completed locally: G1 (GitHub & Gemini Live Integrations), G2 (Intake & Identity), G3 (AI Agent & Manager Publication), G4 (Client Decisions & Scope Swap), G5 (Real Execution Engine & Baseline Finalization).
-- Tests: 15/42 release tests PASS; 6 supplemental local checks PASS. Live evidence in `evidence/2026-10-17-end-to-end-execution.md`.
+- Gates completed locally: G1 (GitHub & Gemini Live Integrations), G2 (Intake & Identity), G3 (AI Agent & Manager Publication), G4 (Client Decisions & Scope Swap), G5 (Real Execution Engine & Baseline Finalization), G6 (Reliability, Recovery, Reminders & Failure Isolation).
+- Tests: 27/42 release tests PASS; 6 supplemental local checks PASS (33 PASS total). Live evidence in `evidence/2026-10-17-end-to-end-execution.md` and `evidence/2026-10-17-reliability-recovery-evidence.md`.
 - Next actions:
   1. Operator follows `deployment/alternate-clouds/README.md` for hosted HTTPS/restart evidence (T01/T02).
-  2. Implement Google Workspace credentials for Drive/Docs revision sync and Gmail outbox (B13/B14).
+  2. Implement Google Workspace credentials for Drive/Docs revision sync and Gmail outbox (B13).
+  3. Record deployed demonstration video and prepare submission documentation (B18/B19).
 
 ## Current execution plan
 1. G0: Deploy persistent PostgreSQL and n8n on Alternate Clouds; prove HTTPS and restart persistence.
@@ -33,7 +34,7 @@ TODO = not started; IN PROGRESS = active with owner; BLOCKED = named prerequisit
 | B01 | Confirm corrected deadline, platform constraints and credits | B | TODO | Organizer/platform confirmation |
 | B02 | Deploy n8n and persistent PostgreSQL on Alternate Clouds | B / implementation agent | IN PROGRESS | Local 2.43.7 harness passes; hosted T01/T02 awaiting operator |
 | B03 | Configure dedicated GitHub & Gemini credentials | A | DONE | T03/T04 live reads/writes on GitHub & Gemini 3.8 Flash |
-| B04 | Apply schema and implement privileged transaction routines | B / implementation agent | DONE | Migrations 002/003, local DBU01–DBU03, full atomic routines verified |
+| B04 | Apply schema and implement privileged transaction routines | B / implementation agent | DONE | Migrations 002/003/004, local DBU01–DBU03, full atomic routines verified |
 | B05 | Configure one real project and manager-verified baseline | A | DONE | `seed_demo_project.sql` baseline verified (DEL-01, DEL-02, Scope v1) |
 | B06 | Build email intake and dedup | A | DONE | T05 intake deduplication and case ingestion verified |
 | B07 | Retrieve/version evidence and resolve actual issues | A | DONE | T06 evidence snapshotting and GitHub issue resolution verified |
@@ -43,10 +44,10 @@ TODO = not started; IN PROGRESS = active with owner; BLOCKED = named prerequisit
 | B11 | Build atomic client acceptance/reject/clarify | B | DONE | T17/T18/T23 client OTP and Option B Scope Swap acceptance verified |
 | B12 | Implement action claims, leases and provider writes | A | DONE | T27/T28 GitHub issue create (#4) and supersede (#2) read-back verified |
 | B13 | Implement Docs revision publication and activation | A | BLOCKED | Requires Google Workspace OAuth/service account; T33 |
-| B14 | Implement notification outbox/reminders/expiry | B | TODO | T25/T37/T38 |
-| B15 | Add reconciliation and operator recovery | A+B | TODO | T29–T36 |
-| B16 | Run full test matrix and fix all P0 defects | A+B | IN PROGRESS | 15 release tests PASS, test-results.csv updated |
-| B17 | Export safe workflows and restore-test backups | B | DONE | WF01-WF04 sanitized and exported to `workflows/` |
+| B14 | Implement notification outbox/reminders/expiry | B | DONE | T37/T38 verified in `evidence/2026-10-17-reliability-recovery-evidence.md` |
+| B15 | Add reconciliation and operator recovery | A+B | DONE | T20/T22/T29/T30/T32/T33 verified in `evidence/2026-10-17-reliability-recovery-evidence.md` |
+| B16 | Run full test matrix and fix all P0 defects | A+B | IN PROGRESS | 27 release tests PASS (33 total), test-results.csv updated |
+| B17 | Export safe workflows and restore-test backups | B | DONE | WF01-WF07 sanitized and exported to `workflows/` |
 | B18 | Record fresh end-to-end deployed demonstration | A | IN PROGRESS | Live e2e lifecycle runner passing; video recording pending |
 | B19 | Complete self-written social post and submission PDF | A+B | TODO | Accessible links/screenshots; no AI-written post |
 
@@ -59,7 +60,7 @@ TODO = not started; IN PROGRESS = active with owner; BLOCKED = named prerequisit
 | G3 Agent and manager publication | DONE | [live e2e evidence](evidence/2026-10-17-end-to-end-execution.md) | Gemini 3.8 Flash & Manager immutable publish passing |
 | G4 Client decisions | DONE | [live e2e evidence](evidence/2026-10-17-end-to-end-execution.md) | Client OTP verification & Option B Scope Swap acceptance passing |
 | G5 Real execution | DONE | [live e2e evidence](evidence/2026-10-17-end-to-end-execution.md) | GitHub issue creation, supersession, read-back & v2 baseline activation passing |
-| G6 Reliability/security | IN PROGRESS | [live e2e evidence](evidence/2026-10-17-end-to-end-execution.md) | Immutability triggers and concurrency guards passing |
+| G6 Reliability/security | DONE | [reliability recovery evidence](evidence/2026-10-17-reliability-recovery-evidence.md) | Immutability triggers, lease reconciler, crash recovery & concurrency guards passing |
 | G7 Submission | TODO | — | Video, social post, and hosted URL |
 
 ## Blockers

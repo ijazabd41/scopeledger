@@ -1,0 +1,64 @@
+{
+  "name": "ScopeLedger WF07 - Error Reconciliation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "scopeledger-reconcile",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a7b8c9d0-0007-4000-8000-000000000001",
+      "name": "Reconciliation Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "webhookId": "91a87b1c-3e4f-4d6a-8b1e-0123456789b1"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT reconciled_action_id, previous_state, new_state, attempt\nFROM scopeledger.reconcile_stalled_actions('reconciler-worker-01', 3, 'api-reconcile');",
+        "options": {}
+      },
+      "id": "a7b8c9d0-0007-4000-8000-000000000002",
+      "name": "Reconcile Stalled Actions",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [240, 0],
+      "credentials": {
+        "postgres": {
+          "id": "YLxzohMuXai17DAX",
+          "name": "scopeledger-postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  status: 'success',\n  reconciled_actions: $('Reconcile Stalled Actions').all().map(r => r.json),\n  reconciled_count: $('Reconcile Stalled Actions').all().length\n}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "a7b8c9d0-0007-4000-8000-000000000003",
+      "name": "Return Reconciliation Receipt",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [480, 0]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Reconciliation Webhook": {
+      "main": [[{ "node": "Reconcile Stalled Actions", "type": "main", "index": 0 }]]
+    },
+    "Reconcile Stalled Actions": {
+      "main": [[{ "node": "Return Reconciliation Receipt", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

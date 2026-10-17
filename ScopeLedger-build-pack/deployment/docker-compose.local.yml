@@ -13,6 +13,7 @@ services:
       - ../schema.sql:/opt/scopeledger/001_schema.sql:ro
       - ../db/migrations/002_authorization_and_execution.sql:/opt/scopeledger/002_authorization_and_execution.sql:ro
       - ../db/migrations/003_least_privilege_roles.sql:/opt/scopeledger/003_least_privilege_roles.sql:ro
+      - ../db/migrations/004_reconciliation_and_notifications.sql:/opt/scopeledger/004_reconciliation_and_notifications.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d n8n"]
       interval: 5s
