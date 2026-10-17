@@ -1,46 +1,136 @@
-# n8n workflow specifications
+# ScopePilot n8n workflow specifications
 
-Names below are logical workflow/node names; verify available node names and parameters against the pinned n8n release. Build and export real workflow JSON only after configuration. No fictional exported workflow is included.
+This document specifies the actual node-level responsibilities, connections, and contracts implemented across the 13 exported workflow JSON files in `workflows/`. Every workflow is exported inactive with placeholder credential IDs.
 
 ## Shared envelope
-Every internal call carries case_id, project_id, correlation_id, expected_case_version and caller_role derived from the authenticated workflow context. Never trust these fields from an external request without lookup. Every workflow writes a safe audit event and error code.
+Every internal call carries `case_id`, `project_id`, `correlation_id`, `expected_case_version` and `caller_role` derived from the authenticated workflow context. External requests are authenticated via header or bearer tokens before any database operation. Every workflow logs safe audit events in PostgreSQL.
 
-## WF00 — Project onboarding
-Manager-authenticated Form/Webhook → validate allowlisted repo/folder and client address → credential smoke reads → fetch original scope → extract normalized deliverables → manager verifies mapping → create initial scope version → activate project. Block intake until baseline and GitHub links are confirmed. Input includes display name, configured resource IDs and decision-maker email, not credentials.
+---
 
-## WF01 — Email intake
-Gmail Trigger (label designated messages, poll supported interval) → fetch full selected message → normalize plain text/MIME and size limits → deduplicate via mailbox+message ID → deterministic project resolution → insert case → call WF02. Unknown sender, forwarded identity ambiguity or multiple matching projects → blocked routing queue. Do not ingest the whole inbox. Sender address is routing evidence, not approval authentication.
+## WF01 & WF01A — Email intake and autonomous AI investigation
 
-## WF02 — Investigate
-Load configured project and active baseline → retrieve current source revisions and GitHub issue fields → persist evidence snapshot/version → AI Agent → structured parser/JSON Schema validation → deterministic reference checks → persist recommendation → create manager review notification. Agent can retrieve more evidence via WF09; at most 8 tool calls and 2 model attempts, 90-second investigation budget. Budget exceeded → manager review with partial evidence, not guessed output. No provider writes.
+### WF01A — Gmail Trigger Adapter
+- **Trigger**: Gmail Trigger node polling dedicated inbox with query `label:ScopePilot/Intake`.
+- **Logic**: Filters messages from client addresses, extracts `message_id`, `thread_id`, `from`, `subject`, and plain body.
+- **Dispatch**: Forwards verified email payload to `WF-01` over internal HTTP webhook with shared header authentication (`scopeledger-internal-webhook`).
 
-## WF03 — Manager decision
-GET review page displays sanitized evidence and options after verification. POST decision uses token + current version. Branches:
-- clarify: manager approves exact question and recipient; enqueue mail, set clarification_required.
-- decline: record reason, enqueue approved response, set rejected.
-- covered: manager confirms no baseline change; optionally authorizes one defined task action using same action ledger.
-- publish options: require confirmed effort, prices, currency, dates and issue mapping; persist new immutable proposal, record publication decision, enqueue client invitation, set awaiting_client.
-Changes to options invalidate existing client tokens. Manager cannot silently accept on behalf of client.
+### WF01 — Intake, AI Agent, and MCP Investigation
+1. **Authenticated Intake Webhook**: Receives email payload via `scopeledger-internal-intake` with header authentication.
+2. **Route And Deduplicate Email**: Calls PostgreSQL `scopeledger.ingest_email_case()`. Deduplicates by `mailbox_id + message_id`. Unknown senders or duplicate messages are halted.
+3. **Fetch Active Scope Metadata**: Queries project details, active scope baseline, repo owner/name, drive folder, and active deliverable IDs.
+4. **Read Active Google Doc**: Fetches active scope document text via Google Docs API. If unreadable, flags `doc_missing: true` with error isolation (`continueRegularOutput`).
+5. **Read GitHub Issues**: Fetches open repository issues via GitHub API (excluding PRs).
+6. **Assemble Investigation Prompt & Evidence**: Formats case facts, active scope deliverables, and initial evidence snapshots into the agent prompt payload.
+7. **AI Agent - Scope Investigator (`@n8n/n8n-nodes-langchain.agent`)**:
+   - Loops through reasoning and tool calls up to **8 iterations**, with **2 model retry attempts** and a **90-second timeout budget**.
+   - Connected sub-nodes:
+     - `Gemini 3.8 Flash Chat Model` (`@n8n/n8n-nodes-langchain.lmChatGoogleGemini`): Reasoning model (`models/gemini-3.8-flash`, temperature 0.1).
+     - `ScopePilot MCP Client Tool` (`@n8n/n8n-nodes-langchain.mcpClientTool`): Connects to `WF-09` MCP server to query `Project_Context` and `Case_Evidence`.
+     - `Structured Output Parser` (`@n8n/n8n-nodes-langchain.outputParserStructured`): Enforces `agent-output.schema.json`.
+8. **Validate Grounding & Evidence Citations**:
+   - Enforces strict classifications: `covered`, `additional`, or `ambiguous`.
+   - Validates referenced deliverable IDs against active baseline deliverables.
+   - Validates GitHub issue references against actual open issues.
+   - Enforces `doc_missing` rule: forces `ambiguous` with confidence `<= 0.5`.
+   - Fallback escalation: if the agent times out or returns malformed output, generates a deterministic `ambiguous` escalation for human manager review.
+9. **Persist Investigation And Evidence**: Calls `scopeledger.record_investigation_result()` to store the recommendation, snapshot evidence, and advance case to `awaiting_manager`.
+10. **Return Investigation Receipt**: Returns HTTP 202 receipt with `case_id` and `evidence_version`.
 
-## WF04 — Client verification and decision
-Use GET for view, POST /auth/request-code, POST /auth/verify-code, POST /decision. Paths are logical route contracts under n8n production webhooks, not claims of an implemented service. Send OTP only to configured client address; never to request-supplied address. After verification, issue short-lived review token. POST decision runs approval transaction. Return 202 with receipt for acceptance pending sync; reject/clarify transitions do not execute changes. Email replies are evidence only.
+---
 
-## WF05 — Execution dispatcher
-Scheduled trigger or internal authenticated dispatch → atomically claim accepted case → preflight evidence fingerprints → acquire project lease → prepare accepted scope draft → execute allowlisted GitHub actions sequentially → publish/fill new scope document → verify all mandatory effects → activate new scope revision transactionally → enqueue completion notice → completed. If a verified effect exists and another fails: partially_applied; baseline not activated. Do not send success mail until complete.
+## WF02 & WF02B — Manager proposal publication
 
-A new GitHub issue includes a unique ScopePilot action marker. For swaps, existing issue is preserved; add a superseded label/comment and close only when the approved plan specifically authorizes closure. Never delete issues. Reconcile uncertain create requests before retry.
+### WF02 — Manager Request Challenge
+- Authenticates manager review session.
+- Fetches case investigation and evidence.
+- Generates 6-digit cryptographic OTP bound to the exact case `row_version`.
+- Dispatches OTP to configured manager email via outbox.
 
-## WF06 — Reminders and expiry
-Schedule every 5 minutes → query due unpublished/sent reviews → stable reminder key per stage/interval → enqueue reminder. Suggested reminders 24h and 48h, proposal expiry 72h (configurable). Timeout expires the decision and alerts manager. Never convert expiry to acceptance. Changes accepted before expiry may continue syncing; the original decision remains valid unless preflight fails.
+### WF02B — Manager Confirm Publish
+- Receives manager decision payload, options, pricing, and entered OTP.
+- Calls `scopeledger.confirm_manager_challenge()` and `scopeledger.publish_proposal()`.
+- Validates OTP and verifies that the case `row_version` has not changed since review.
+- Persists immutable proposal, enqueues client invitation notification, and advances case to `awaiting_client`.
 
-## WF07 — Notification outbox
-Claim pending notification → render approved template → send via Gmail → store provider ID → verified sent. Unknown send outcome → reconcile Sent by unique Message-ID where supported; otherwise manual review, not blind resend. Delivery/sent is not proof recipient read the message. Failed delivery is shown separately from accepted agreement state.
+---
 
-## WF08 — Error and reconciliation
-Error Trigger catches unhandled workflow failures → identify correlated case/action → log redacted error → notify operator. Scheduled scan also finds stalled/unknown actions in case Error Trigger itself failed. Read provider state and classify effect as verified, absent-and-safe-to-retry, or unresolved. Resume only safe action keys. Never rerun the whole case automatically.
+## WF03 & WF03B — Client decision & verification
 
-## WF09 — MCP evidence tools
-MCP Server Trigger (authenticated) → tool subworkflows for baseline, evidence and issue reads. Main AI Agent connects through MCP Client Tool to this endpoint so MCP is actually exercised. Per-case credentials bind tool access to the server-side investigation context. If the chosen n8n version cannot propagate a trustworthy context, bind the MVP tools to the one configured demo project; do not claim arbitrary multi-project isolation. No write or approval tool is exposed.
+### WF03 — Client Request Challenge
+- Client accesses public review form.
+- Generates 6-digit OTP sent strictly to the configured project client email.
 
-## WF10 — Operator view
-Manager-authenticated form/webhook → case list/detail, source links, proposal version, safe action receipts, error status and next permitted recovery action. Recovery POST requires fresh manager authorization for changed plans. Never expose n8n editor or credential pages to client accounts.
+### WF03B — Client Confirm Decision
+- Receives selected proposal option, rationale, and client OTP.
+- Calls `scopeledger.confirm_client_challenge()` and `scopeledger.decide_proposal()`.
+- Rejects stale proposals, expired proposals, or concurrent conflicting cases.
+- Enqueues provider actions in `actions` table and advances case to `accepted_pending_sync`.
+
+---
+
+## WF04 — Execution engine
+
+- Scheduled/webhook triggered worker.
+- Acquires project execution lease.
+- Claims pending actions atomically via `scopeledger.claim_next_action()`.
+- Sequential provider branches:
+  - **GitHub Issue Supersede**: Updates superseded deliverable issues with `scopeledger:superseded` label and comments.
+  - **Google Docs Revision Create**: Creates, populates, and reads back the new scope document revision with cryptographic verification markers.
+  - **GitHub Issue Create**: Creates new tasks with labels, deliverables mapping, and tracking markers.
+- Records verification via `scopeledger.record_action_result()`.
+- Once all actions verify, calls `scopeledger.finalize_case()` to activate Scope Version 2 and complete the case.
+- If any action fails, isolates case in `partially_applied` without corrupting baseline.
+
+---
+
+## WF05 — Reminders and expiry
+
+- Runs every 5 minutes on schedule.
+- Queries unpublished proposals or pending client reviews.
+- Generates idempotent reminder notifications.
+- Automatically transitions proposals past the expiry threshold to `expired` status.
+
+---
+
+## WF06 — Notification outbox
+
+- Runs on schedule.
+- Atomically claims pending outbox notifications (`scopeledger.claim_notification()`).
+- Dispatches emails via Gmail API with stable Message-ID threading.
+- Records delivery status and provider message ID.
+
+---
+
+## WF07 — Stalled lease & crash reconciliation
+
+- Runs every 5 minutes on schedule.
+- Calls `scopeledger.reconcile_stalled_actions()`.
+- Detects actions with expired worker leases and safely requeues them up to max attempts.
+- Marks persistently failing actions as `blocked` and updates case to `partially_applied` or `blocked`.
+- Releases abandoned project execution leases.
+
+---
+
+## WF08 — Authenticated MCP read API
+
+- Internal authenticated webhooks protected by `scopeledger-internal-webhook`.
+- Exposes two read endpoints:
+  - `GET /webhook/scopeledger-mcp-project-context`: Returns active scope baseline, repo info, and drive folder.
+  - `GET /webhook/scopeledger-mcp-case-evidence`: Returns case evidence snapshots filtered by project boundary.
+
+---
+
+## WF09 — Authenticated read-only MCP server
+
+- Trigger: `@n8n/n8n-nodes-langchain.mcpTrigger` at `/mcp/scopeledger-mcp` with `httpBearerAuth`.
+- Exposes two tools via `@n8n/n8n-nodes-langchain.toolHttpRequest`:
+  - `Project_Context`: Binds to WF-08 project context endpoint.
+  - `Case_Evidence`: Binds to WF-08 case evidence endpoint.
+- Provides read-only evidence querying capabilities to the AI Agent in WF-01.
+
+---
+
+## WF-G0 — Health and verification
+
+- Static health check webhook at `/webhook/scopeledger-health-v1`.
+- Emits verification receipt proving n8n uptime and readiness on Alternate Clouds.

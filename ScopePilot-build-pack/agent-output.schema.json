@@ -14,7 +14,7 @@
     "classification": {
       "enum": [
         "covered",
-        "change",
+        "additional",
         "ambiguous"
       ]
     },

@@ -1,0 +1,45 @@
+# Environment files and credentials
+.env
+.env.local
+.env.*.local
+*.env
+ScopePilot-build-pack/deployment/.env.local
+ScopePilot-build-pack/deployment/init/gemini_cred.json
+ScopePilot-build-pack/deployment/init/n8n_credentials.json
+
+# Legacy directory leftovers
+ScopeLedger-build-pack/
+
+# Local databases and runtime volumes
+data/
+storage/
+ScopePilot-build-pack/deployment/storage/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+env/
+venv/
+
+# Node artifacts
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Release zip archives (build artifacts)
+ScopePilot-deployment-package-*.zip
+ScopePilot-deployment-package-*.zip.sha256
+
+# Logs & temp files
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/

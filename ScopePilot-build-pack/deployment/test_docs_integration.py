@@ -12,6 +12,15 @@ import uuid
 from docs_adapter import GoogleDocsAdapter
 
 def psql(sql):
+    pg_bin = r"C:\Program Files\PostgreSQL\17\bin\psql.exe"
+    if os.path.exists(pg_bin):
+        env = os.environ.copy()
+        env["PGPASSWORD"] = "ScopeLedgerLocal2026DevPassSecret!"
+        cmd = [pg_bin, "-U", "postgres", "-h", "127.0.0.1", "-p", "5432", "-d", "scopeledger", "-t", "-A", "-c", sql]
+        res = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        if res.returncode != 0:
+            raise RuntimeError(f"PSQL Error: {res.stderr}\nQuery: {sql}")
+        return res.stdout.strip()
     cmd = ['docker', 'exec', 'deployment-postgres-1', 'psql', '-U', 'postgres', '-d', 'scopeledger', '-t', '-A', '-c', sql]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:

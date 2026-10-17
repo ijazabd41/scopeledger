@@ -38,6 +38,12 @@ def gh_api(method, path, body=None):
         return json.loads(resp.read().decode('utf-8'))
 
 def psql(sql):
+    pg_bin = r"C:\Program Files\PostgreSQL\17\bin\psql.exe"
+    if os.path.exists(pg_bin):
+        env = os.environ.copy()
+        env["PGPASSWORD"] = "ScopeLedgerLocal2026DevPassSecret!"
+        cmd = [pg_bin, "-U", "postgres", "-h", "127.0.0.1", "-p", "5432", "-d", "scopeledger", "-t", "-A", "-c", sql]
+        return subprocess.check_output(cmd, text=True, env=env).strip()
     cmd = ['docker', 'exec', 'deployment-postgres-1', 'psql', '-U', 'postgres', '-d', 'scopeledger', '-t', '-A', '-c', sql]
     return subprocess.check_output(cmd, text=True).strip()
 

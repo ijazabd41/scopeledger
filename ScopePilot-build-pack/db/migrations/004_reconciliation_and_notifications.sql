@@ -139,7 +139,7 @@ SECURITY DEFINER
 SET search_path = scopeledger, public
 AS $$
 BEGIN
-  -- 1. Reconcile stalled actions and log audit trail
+  -- 1. Reconcile stalled actions, update blocked cases, and log audit trail
   RETURN QUERY
   WITH stalled AS (
     SELECT a.id, a.case_id, a.state, a.attempt_count
@@ -157,6 +157,17 @@ BEGIN
       FROM stalled s
      WHERE a.id = s.id
      RETURNING a.id, s.state AS old_st, a.state AS new_st, a.attempt_count, a.case_id
+  ), case_updates AS (
+    UPDATE cases c
+       SET state = CASE
+             WHEN EXISTS (SELECT 1 FROM actions a WHERE a.case_id = c.id AND a.state = 'verified') THEN 'partially_applied'
+             ELSE 'blocked'
+           END,
+           last_error_code = 'ACTION_BLOCKED'
+      FROM updated u
+     WHERE c.id = u.case_id
+       AND u.new_st = 'blocked'
+       AND c.state IN ('applying', 'accepted_pending_sync')
   )
   INSERT INTO audit_events(case_id, correlation_id, actor_role, event_type, safe_details)
   SELECT u.case_id, p_correlation_id, 'reconciler', 'action_reconciled',
@@ -173,17 +184,7 @@ BEGIN
             safe_details->>'new_state',
             (safe_details->>'attempt_count')::integer;
 
-  -- 2. Update case state for blocked actions (T33: partially_applied visible)
-  UPDATE cases c
-     SET state = CASE
-           WHEN EXISTS (SELECT 1 FROM actions a WHERE a.case_id = c.id AND a.state = 'verified') THEN 'partially_applied'
-           ELSE 'blocked'
-         END,
-         last_error_code = 'ACTION_BLOCKED'
-   WHERE c.id IN (SELECT case_id FROM updated WHERE new_st = 'blocked')
-     AND c.state IN ('applying', 'accepted_pending_sync');
-
-  -- 3. Release project execution leases for projects with no remaining running actions
+  -- 2. Release project execution leases for projects with no remaining running actions
   UPDATE projects p
      SET execution_lease_owner = NULL,
          execution_lease_until = NULL
