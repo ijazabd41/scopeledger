@@ -3,3 +3,4 @@ init/gemini_cred.json
 init/n8n_credentials.json
 __pycache__/
 *.log
+storage/

@@ -4,6 +4,9 @@ import urllib.request
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(__file__))
+from docs_adapter import GoogleDocsAdapter
+
 def get_env_var(key, default=""):
     val = os.environ.get(key)
     if val:
@@ -210,6 +213,22 @@ Return pure JSON only."""
                             "state": "closed",
                             "labels": ["scopeledger:superseded"]
                         }
+                    },
+                    {
+                        "business_suffix": f"docs-revision-v2-{case_id[:8]}",
+                        "provider": "google_docs",
+                        "action_kind": "scope_document_create",
+                        "approved_payload": {
+                            "title": "Scope Agreement Revision v2 - Acme Corp",
+                            "folder_id": "demo-drive-folder-001",
+                            "marker": f"ScopeLedger:scope-v2:{case_id}",
+                            "scope_version": 2,
+                            "deliverables": [
+                                {"id": "DEL-01", "title": "Marketing Website Landing Page", "status": "active", "github_issue_number": 1},
+                                {"id": "DEL-02", "title": "CSV Data Export Feature", "status": "superseded", "github_issue_number": 2},
+                                {"id": "DEL-03", "title": "Account Dashboard", "status": "active"}
+                            ]
+                        }
                     }
                 ]
             }
@@ -340,6 +359,8 @@ Return pure JSON only."""
     
     claim_sql = f"SELECT id, action_kind, approved_payload::text, resource_id FROM scopeledger.claim_next_action('{WORKER_ID}', 120);"
     processed_actions = 0
+    last_doc_id = ""
+    last_rev_id = ""
 
     while True:
         row = psql(claim_sql)
@@ -424,6 +445,46 @@ Return pure JSON only."""
             );
             """)
             print(f"Action {action_id} verified with independent readback!")
+
+        elif action_kind == "scope_document_create":
+            print(f"Executing Google Docs Scope Revision publication (Action {action_id})...")
+            docs_adapter = GoogleDocsAdapter()
+            doc_pub = docs_adapter.create_and_publish_scope_revision(
+                project_name="Acme Corp - Web & Reporting Platform",
+                scope_version=act_payload.get("scope_version", 2),
+                title=act_payload["title"],
+                folder_id=act_payload["folder_id"],
+                marker=act_payload["marker"],
+                normalized_scope={
+                    "deliverables": act_payload["deliverables"]
+                },
+                case_id=case_id,
+                proposal_id=proposal_id,
+                decision_id="dec-" + case_id[:8],
+                effective_date="2026-10-24"
+            )
+            print(f"Scope Revision Document Created: ID={doc_pub['document_id']}, URL={doc_pub['document_url']}")
+
+            readback = docs_adapter.verify_scope_document_readback(
+                folder_id=act_payload["folder_id"],
+                document_id=doc_pub["document_id"],
+                expected_marker=act_payload["marker"]
+            )
+            assert readback["marker_matched"] is True, "Expected verification marker to match"
+
+            psql(f"""
+            SELECT scopeledger.record_action_result(
+              '{action_id}'::uuid,
+              '{WORKER_ID}',
+              'verified',
+              '{json.dumps(doc_pub)}'::jsonb,
+              '{json.dumps(readback)}'::jsonb
+            );
+            """)
+            print(f"Action {action_id} (Google Docs scope revision) verified with independent readback!")
+            last_doc_id = doc_pub["document_id"]
+            last_rev_id = doc_pub["provider_revision"]
+
         else:
             raise ValueError(f"Unknown action kind: {action_kind}")
 
@@ -432,8 +493,8 @@ Return pure JSON only."""
     psql(f"""
     SELECT scope_version_id, completed_at FROM scopeledger.finalize_verified_case(
       '{case_id}'::uuid,
-      'https://github.com/{REPO_OWNER}/{REPO_NAME}',
-      'rev-scope-v2',
+      '{last_doc_id or "doc-scope-v2-acme"}',
+      '{last_rev_id or "rev-scope-v2"}',
       'corr-final'
     );
     """)
@@ -441,15 +502,19 @@ Return pure JSON only."""
     # Assert final project state
     final_case_state = psql(f"SELECT state FROM scopeledger.cases WHERE id = '{case_id}';")
     active_scope_v2 = psql(f"""
-    SELECT sv.version, sv.status, p.active_scope_id
+    SELECT sv.version, sv.status, p.active_scope_id, sv.document_id, sv.provider_revision
     FROM scopeledger.projects p
     JOIN scopeledger.scope_versions sv ON sv.id = p.active_scope_id
     WHERE p.id = '{PROJECT_ID}';
-    """)
+    """).split('|')
     print(f"Case Final State: {final_case_state}")
-    print(f"Project Active Scope: {active_scope_v2}")
+    print(f"Project Active Scope: Version {active_scope_v2[0]}, Status {active_scope_v2[1]}, DocID {active_scope_v2[3]}, Rev {active_scope_v2[4]}")
     assert final_case_state == "completed", f"Expected completed, got {final_case_state}"
-    assert "2|active" in active_scope_v2, f"Expected version 2 active, got {active_scope_v2}"
+    assert active_scope_v2[0] == "2", f"Expected version 2 active, got {active_scope_v2[0]}"
+    assert active_scope_v2[1] == "active", f"Expected active status, got {active_scope_v2[1]}"
+    if last_doc_id:
+        assert active_scope_v2[3] == last_doc_id, f"Expected active scope document {last_doc_id}, got {active_scope_v2[3]}"
+        assert active_scope_v2[4] == last_rev_id, f"Expected active scope revision {last_rev_id}, got {active_scope_v2[4]}"
 
     # Step 8: Immutability and Replay Protection Assertions
     print("\n[Step 8] Testing replay protection and append-only immutability...")

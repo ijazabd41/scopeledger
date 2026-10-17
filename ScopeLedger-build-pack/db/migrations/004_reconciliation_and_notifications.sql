@@ -172,7 +172,17 @@ BEGIN
             safe_details->>'new_state',
             (safe_details->>'attempt_count')::integer;
 
-  -- 2. Release project execution leases for projects with no remaining running actions
+  -- 2. Update case state for blocked actions (T33: partially_applied visible)
+  UPDATE cases c
+     SET state = CASE
+           WHEN EXISTS (SELECT 1 FROM actions a WHERE a.case_id = c.id AND a.state = 'verified') THEN 'partially_applied'
+           ELSE 'blocked'
+         END,
+         last_error_code = 'ACTION_BLOCKED'
+   WHERE c.id IN (SELECT case_id FROM updated WHERE new_st = 'blocked')
+     AND c.state IN ('applying', 'accepted_pending_sync');
+
+  -- 3. Release project execution leases for projects with no remaining running actions
   UPDATE projects p
      SET execution_lease_owner = NULL,
          execution_lease_until = NULL
@@ -245,3 +255,53 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION claim_next_action(text, integer) TO scopeledger_worker;
+
+-- 5. Enhanced record_action_result to reflect partially_applied on cases
+CREATE OR REPLACE FUNCTION record_action_result(
+  p_action_id uuid,
+  p_worker_id text,
+  p_outcome text,
+  p_provider_receipt jsonb DEFAULT NULL,
+  p_verification jsonb DEFAULT NULL,
+  p_error_code text DEFAULT NULL,
+  p_retry_after timestamptz DEFAULT NULL
+)
+RETURNS actions
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = scopeledger, public
+AS $$
+DECLARE
+  v_action actions%ROWTYPE;
+BEGIN
+  SELECT * INTO v_action FROM actions WHERE id = p_action_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE = 'SL001', MESSAGE = 'action not found'; END IF;
+  IF v_action.state <> 'running' OR v_action.lease_owner <> p_worker_id OR v_action.lease_until <= now() THEN
+    RAISE EXCEPTION USING ERRCODE = 'SL008', MESSAGE = 'worker does not hold the active action lease';
+  END IF;
+  IF p_outcome NOT IN ('verified','retryable','unknown','blocked') THEN
+    RAISE EXCEPTION USING ERRCODE = 'SL004', MESSAGE = 'invalid action outcome';
+  END IF;
+  IF p_outcome = 'verified' AND (p_verification IS NULL OR jsonb_typeof(p_verification) <> 'object') THEN
+    RAISE EXCEPTION USING ERRCODE = 'SL004', MESSAGE = 'verified action requires independent verification';
+  END IF;
+  UPDATE actions SET state = p_outcome, provider_receipt = coalesce(p_provider_receipt, provider_receipt),
+                     verification = CASE WHEN p_outcome = 'verified' THEN p_verification ELSE verification END,
+                     last_error_code = p_error_code, next_attempt_at = p_retry_after,
+                     lease_owner = NULL, lease_until = NULL,
+                     reconciled_at = CASE WHEN p_outcome IN ('verified','retryable') THEN now() ELSE reconciled_at END
+   WHERE id = p_action_id RETURNING * INTO v_action;
+
+  IF p_outcome = 'blocked' THEN
+    IF EXISTS (SELECT 1 FROM actions WHERE case_id = v_action.case_id AND state = 'verified') THEN
+      UPDATE cases SET state = 'partially_applied', last_error_code = coalesce(p_error_code, 'ACTION_BLOCKED') WHERE id = v_action.case_id;
+    ELSE
+      UPDATE cases SET state = 'blocked', last_error_code = coalesce(p_error_code, 'ACTION_BLOCKED') WHERE id = v_action.case_id;
+    END IF;
+  END IF;
+
+  RETURN v_action;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION record_action_result(uuid, text, text, jsonb, jsonb, text, timestamptz) TO scopeledger_worker;
